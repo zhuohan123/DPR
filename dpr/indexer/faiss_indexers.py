@@ -109,6 +109,43 @@ class DenseFlatIndexer(DenseIndexer):
         return result
 
 
+class DenseQPFlatIndexer(DenseIndexer):
+
+    def __init__(self, vector_sz: int, buffer_size: int = 50000,
+                 n_centroids: int = 12800, training_size: int = 512000,
+                 code_size: int = 64, n_probes: int = 32):
+        super(DenseQPFlatIndexer, self).__init__(buffer_size=buffer_size)
+        self.quantizer = faiss.IndexFlatIP(vector_sz)
+        self.index = faiss.IndexIVFPQ(self.quantizer, vector_sz, n_centroids, code_size, 8)
+        self.training_size = training_size
+        self.index.nprobe = n_probes
+
+    def _index_batch(self, data: List[Tuple[object, np.array]]):
+        db_ids = [t[0] for t in data]
+        vectors = [np.reshape(t[1], (1, -1)) for t in data]
+        vectors = np.concatenate(vectors, axis=0)
+        self._update_id_mapping(db_ids)
+        self.index.add(vectors)
+
+    def _train_index(self, vector_files: List[str]):
+        training_data = random_subset(iterate_encoded_files(vector_files), self.training_size)
+        vectors = [np.reshape(t[1], (1, -1)) for t in training_data]
+        vectors = np.concatenate(vectors, axis=0)
+        self.index.train(vectors)
+
+    def index_data(self, vector_files: List[str]):
+        self._train_index(vector_files)
+
+        super(DenseQPFlatIndexer, self).index_data(vector_files)
+
+    def search_knn(self, query_vectors: np.array, top_docs: int) -> List[Tuple[List[object], List[float]]]:
+        scores, indexes = self.index.search(query_vectors, top_docs)
+        # convert to external ids
+        db_ids = [[self.index_id_to_db_id[i] for i in query_top_idxs] for query_top_idxs in indexes]
+        result = [(db_ids[i], scores[i]) for i in range(len(db_ids))]
+        return result
+
+
 class DenseHNSWFlatIndexer(DenseIndexer):
     """
      Efficient index for retrieval. Note: default settings are for hugh accuracy but also high RAM usage
@@ -189,3 +226,25 @@ def iterate_encoded_files(vector_files: list) -> Iterator[Tuple[object, np.array
             for doc in doc_vectors:
                 db_id, doc_vector = doc
                 yield db_id, doc_vector
+
+
+def random_subset(iterator, k):
+    """
+    Reservoir sampling.
+    :param iterator: the iterator to sample from.
+    :param k: number of samples
+    :return: k unifrom samples from the iterator
+    """
+    result = []
+    n = 0
+
+    for item in iterator:
+        n += 1
+        if len(result) < k:
+            result.append(item)
+        else:
+            s = int(np.random.rand() * n)
+            if s < k:
+                result[s] = item
+
+    return result

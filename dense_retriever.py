@@ -31,7 +31,7 @@ from dpr.options import add_encoder_params, setup_args_gpu, print_args, set_enco
     add_tokenizer_params, add_cuda_params
 from dpr.utils.data_utils import Tensorizer
 from dpr.utils.model_utils import setup_for_distributed_mode, get_model_obj, load_states_from_checkpoint
-from dpr.indexer.faiss_indexers import DenseIndexer, DenseHNSWFlatIndexer, DenseFlatIndexer
+from dpr.indexer.faiss_indexers import DenseIndexer, DenseHNSWFlatIndexer, DenseFlatIndexer, DenseQPFlatIndexer
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -203,8 +203,12 @@ def main(args):
     vector_size = model_to_load.get_out_size()
     logger.info('Encoder vector_size=%d', vector_size)
 
+    assert not (args.hnsw_index and args.pq_index)
     if args.hnsw_index:
         index = DenseHNSWFlatIndexer(vector_size, args.index_buffer)
+    elif args.pq_index:
+        index = DenseQPFlatIndexer(vector_size, args.index_buffer, args.pq_n_centroids, args.pq_training_size,
+                                   args.pq_code_size, args.pq_n_probes)
     else:
         index = DenseFlatIndexer(vector_size, args.index_buffer)
 
@@ -273,6 +277,13 @@ if __name__ == '__main__':
     parser.add_argument('--index_buffer', type=int, default=50000,
                         help="Temporal memory data buffer size (in samples) for indexer")
     parser.add_argument("--hnsw_index", action='store_true', help='If enabled, use inference time efficient HNSW index')
+    parser.add_argument("--pq_index", action='store_true', help='If enabled, use product quantization')
+    parser.add_argument("--pq_n_centroids", type=int, default=12800,
+                        help='Number of centroids for product quantization')
+    parser.add_argument("--pq_training_size", type=int, default=512000,
+                        help='Number of training samples to train product quantization')
+    parser.add_argument("--pq_code_size", type=int, default=64, help='Code size for product quantization')
+    parser.add_argument("--pq_n_probes", type=int, default=32, help='Number of probes for product quantization')
     parser.add_argument("--save_or_load_index", action='store_true', help='If enabled, save index')
 
     args = parser.parse_args()
